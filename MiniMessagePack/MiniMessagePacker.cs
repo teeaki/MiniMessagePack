@@ -30,6 +30,7 @@ using System.Text;
 using System.IO;
 using System.Collections.Generic;
 using System.Collections;
+using System.Linq;
 
 namespace MiniMessagePack
 {
@@ -320,18 +321,30 @@ namespace MiniMessagePack
 			}
 		}
 
-		public object Unpack (byte[] buf, int offset, int size) {
+		public object Unpack (byte[] buf, int offset, int size,  MapCapture capture = null) {
 			using (MemoryStream ms = new MemoryStream (buf, offset, size)) {
-				return Unpack (ms);
+				return Unpack (ms, capture);
 			}
 		}
 
-		public object Unpack(byte[] buf) {
-			return Unpack (buf, 0, buf.Length);
+		public object Unpack (byte[] buf,  MapCapture capture = null) {
+			return Unpack (buf, 0, buf.Length, capture);
 		}
 
-		public object Unpack(Stream s) {
-			int b = s.ReadByte ();
+		public object Unpack(Stream s, MapCapture capture = null) {
+			if (capture != null) {
+				this.capture = capture;
+				this.context = new CaptureContext ();
+			}
+			object unpacked = UnpackInternal (s);
+			this.capture = null;
+			this.context = null;
+			return unpacked;
+		}
+
+		object UnpackInternal (Stream s)
+		{
+			int b = ReadByte (s);
 			if (b < 0) {
 				throw new FormatException ();
 			} else if (b <= 0x7f) { // positive fixint
@@ -353,37 +366,37 @@ namespace MiniMessagePack
 			case 0xc3:
 				return true;
 			case 0xcc: // uint8
-				return (long)s.ReadByte ();
+				return (long)ReadByte (s);
 			case 0xcd: // uint16
 				return UnpackUint16 (s);
 			case 0xce: // uint32
 				return UnpackUint32 (s);
 			case 0xcf: // uint64
-				if (s.Read (tmp0, 0, 8) != 8) { 
+				if (Read (s, tmp0, 0, 8) != 8) { 
 					throw new FormatException ();
 				}
 				return ((long)tmp0 [0] << 56) | ((long)tmp0 [1] << 48) | ((long)tmp0 [2] << 40) | ((long)tmp0 [3] << 32)
 					+ ((long)tmp0 [4] << 24) | ((long)tmp0 [5] << 16) | ((long)tmp0 [6] << 8) | (long)tmp0 [7];
 			case 0xd0: // int8
-				return (long)unchecked((sbyte)s.ReadByte ());
+				return (long)unchecked((sbyte)ReadByte (s));
 			case 0xd1: // int16
-				if (s.Read (tmp0, 0, 2) != 2) { 
+				if (Read (s, tmp0, 0, 2) != 2) { 
 					throw new FormatException ();
 				}
 				return (((long)unchecked((sbyte)tmp0[0])) << 8) | (long)tmp0[1];
 			case 0xd2: // int32
-				if (s.Read (tmp0, 0, 4) != 4) { 
+				if (Read (s, tmp0, 0, 4) != 4) { 
 					throw new FormatException ();
 				}
 				return ((long)unchecked((sbyte)tmp0[0]) << 24) | ((long)tmp0[1] << 16) | ((long)tmp0[2] << 8) | (long)tmp0[3];
 			case 0xd3: // int64
-				if (s.Read (tmp0, 0, 8) != 8) { 
+				if (Read (s, tmp0, 0, 8) != 8) { 
 					throw new FormatException ();
 				}
 				return ((long)unchecked((sbyte)tmp0[0]) << 56) | ((long)tmp0 [1] << 48) | ((long)tmp0 [2] << 40) | ((long)tmp0 [3] << 32)
 					+ ((long)tmp0 [4] << 24) | ((long)tmp0 [5] << 16) | ((long)tmp0 [6] << 8) | (long)tmp0 [7];
 			case 0xca: // float32
-				s.Read (tmp0, 0, 4);
+				Read (s, tmp0, 0, 4);
 				if (BitConverter.IsLittleEndian) {
 					tmp1[0] = tmp0[3];
 					tmp1[1] = tmp0[2];
@@ -394,7 +407,7 @@ namespace MiniMessagePack
 					return (double)BitConverter.ToSingle (tmp0, 0);
 				}
 			case 0xcb: // float64
-				s.Read (tmp0, 0, 8);
+				Read (s, tmp0, 0, 8);
 				if (BitConverter.IsLittleEndian) {
 					tmp1[0] = tmp0[7];
 					tmp1[1] = tmp0[6];
@@ -409,14 +422,14 @@ namespace MiniMessagePack
 					return BitConverter.ToDouble (tmp0, 0);
 				}
 			case 0xd9: // str8
-				return UnpackString (s, s.ReadByte ());
+				return UnpackString (s, ReadByte (s));
 			case 0xda: // str16
 				return UnpackString (s, UnpackUint16 (s));
 			case 0xdb: // str32
 				return UnpackString (s, UnpackUint32 (s));
 
 			case 0xc4: // bin8
-				return UnpackBinary (s, s.ReadByte ());
+				return UnpackBinary (s, ReadByte (s));
 			case 0xc5: // bin16
 				return UnpackBinary (s, UnpackUint16 (s));
 			case 0xc6: // bin32
@@ -436,14 +449,14 @@ namespace MiniMessagePack
 		}
 
 		private long UnpackUint16(Stream s) {
-			if (s.Read (tmp0, 0, 2) != 2) { 
+			if (Read (s, tmp0, 0, 2) != 2) { 
 				throw new FormatException ();
 			}
 			return (long)((tmp0[0] << 8) | tmp0[1]);
 		}
 
 		private long UnpackUint32(Stream s) {
-			if (s.Read (tmp0, 0, 4) != 4) { 
+			if (Read (s, tmp0, 0, 4) != 4) { 
 				throw new FormatException ();
 			}
 			return ((long)tmp0[0] << 24) | ((long)tmp0[1] << 16) | ((long)tmp0[2] << 8) | (long)tmp0[3];
@@ -453,20 +466,20 @@ namespace MiniMessagePack
 			if (string_buf.Length < len) {
 				string_buf = new byte[len];
 			}
-			s.Read (string_buf, 0, (int)len);
+			Read (s, string_buf, 0, (int)len);
 			return encoder.GetString(string_buf, 0, (int)len);
 		}
 
 		private byte[] UnpackBinary(Stream s, long len) {
 			byte[] buf = new byte[len];
-			s.Read (buf, 0, (int)len);
+			Read (s, buf, 0, (int)len);
 			return buf;
 		}
 
 		private List<object> UnpackArray(Stream s, long len) {
 			var list = new List<object> ((int)len);
 			for (long i = 0; i < len; i++) {
-				list.Add (Unpack (s));
+				list.Add (UnpackInternal (s));
 			}
 			return list;
 		}
@@ -474,15 +487,145 @@ namespace MiniMessagePack
 		private Dictionary<string, object> UnpackMap(Stream s, long len) {
 			var dict = new Dictionary<string, object> ((int)len);
 			for (long i = 0; i < len; i++) {
-				string key = Unpack (s) as string;
-				object value = Unpack (s);
+				string key = UnpackInternal (s) as string;
+				if (context != null) {
+					context.Push (key);
+				}
+				if (this.capture != null && this.capture.Capture (context.Levels)) {
+					context.StartCapture ();
+				}
+				object value = UnpackInternal (s);
 				if (key != null) {
 					dict.Add (key, value);
+				}
+				if (context != null) {
+					CaptureResult result = context.Pop ();
+					if (result != null) {
+						this.capture.Captured (result.Levels, result.Bytes);
+					}
 				}
 			}
 			return dict;
 		}
 
+		MapCapture capture;
+		CaptureContext context;
+
+		int ReadByte(Stream s) {
+			if (context == null) {
+				return s.ReadByte ();
+			}
+			int b = s.ReadByte ();
+			if (context.IsCaptureing ()) {
+				context.Write (b);
+			}
+			return b;
+		}
+
+		int Read(Stream s, byte[] buffer, int pos, int len) {
+			if (context == null) {
+				return s.Read (buffer, pos, len);
+			}
+			int ret = s.Read (buffer, pos, len);
+			if (context.IsCaptureing ()) {
+				context.Write (buffer, pos, len);
+			}
+			return ret;
+		}
+	}
+
+	public interface MapCapture
+	{
+		bool Capture (List<string> levels);
+		void Captured(List<string> levels, byte[] bytes);
+	}
+
+	internal class CaptureContext {
+		List<byte> buffer;
+		Dictionary<List<string>, int> captures = new Dictionary<List<string>, int>();
+		Stack<string> _levels = new Stack<string>();
+
+		public List<string> Levels { get { return new DeepCompareList<string>(_levels.Reverse()); } }
+
+		public void Push (string level)
+		{
+			_levels.Push (level);
+		}
+
+		public CaptureResult Pop ()
+		{
+			CaptureResult capture = null;
+			if (IsCaptureing ()) {
+				var levels = this.Levels;
+				if (captures.ContainsKey (levels)) {
+					int start = captures [levels];
+					byte[] bytes = new byte[buffer.Count - start];
+					buffer.CopyTo (start, bytes, 0, bytes.Length);
+					capture = new CaptureResult () {
+						Levels = levels, Bytes = bytes
+					};
+					captures.Remove (levels);
+					if (captures.Count == 0) {
+						EndCapture ();
+					}
+				}
+			}
+			_levels.Pop ();
+			return capture;
+		}
+
+		public bool IsCaptureing ()
+		{
+			return buffer != null;
+		}
+
+		public void Write (byte[] bytes, int pos, int len)
+		{
+			for (int i = 0; i < len; pos++, i++) {
+				this.buffer.Add (bytes [pos]);
+			}
+		}
+
+		public void Write (int b)
+		{
+			buffer.Add ((byte)b);
+		}
+
+		public void StartCapture ()
+		{
+			if (buffer == null) {
+				buffer = new List<byte> ();
+			}
+			captures [Levels] = buffer.Count;
+		}
+
+		void EndCapture ()
+		{
+			buffer = null;
+		}
+	}
+
+	internal class CaptureResult {
+		public byte[] Bytes;
+		public List<string> Levels;
+	}
+
+	internal class DeepCompareList<T> : List<T> {
+		public DeepCompareList(IEnumerable<T> source) : base(source) {}
+
+		public override bool Equals (object obj)
+		{
+			return obj is IEnumerable<T> && this.SequenceEqual (obj as IEnumerable<T>);
+		}
+			
+		public override int GetHashCode ()
+		{
+			int hashCode = 0;
+			for (int i = 0; i < Count; i++) {
+				hashCode += this [i].GetHashCode ();
+			}
+			return hashCode;
+		}
 	}
 }
 

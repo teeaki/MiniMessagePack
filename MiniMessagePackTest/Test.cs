@@ -1,8 +1,9 @@
-﻿using NUnit.Framework;
-using System;
+﻿using System;
 using MiniMessagePack;
 using System.Collections.Generic;
 using System.Text;
+using NUnit.Framework;
+using System.Linq;
 
 namespace MiniMessagePackTest
 {
@@ -644,6 +645,46 @@ namespace MiniMessagePackTest
 			Assert.AreEqual (expected.Length, msgpack.Length);
 			for(int i = 0; i < expected.Length; i++) {
 				Assert.AreEqual (expected [i], msgpack [i]);
+			}
+		}
+
+		[Test()]
+		public void UnpackWithCapture() {
+			// it means {r:{a:1, b:'s', c:{d:3}}, s:{e:'s'}}
+			var sample = new byte[] {
+				130, 161, 114, 131, 161, 97, 1, 161, 98, 161, 115, 161, 99, 129, 161, 100, 3, 161, 115, 129, 161, 101, 161, 115
+			};
+
+			var test = new TestCapture ();
+			new MiniMessagePack.MiniMessagePacker ().Unpack (sample, test);
+			Assert.AreEqual (4, test.CaptureCount);
+		}
+
+		class TestCapture : MiniMessagePack.MapCapture {
+			public int CaptureCount = 0;
+			public bool Capture (List<string> levels) {
+				bool ret = (levels.Count == 1 && levels [0] == "r")
+					|| (levels.Count == 2 && levels [0] == "r" && levels [1] == "a")
+					|| (levels.Count == 2 && levels [0] == "r" && levels [1] == "c")
+					|| (levels.Count == 2 && levels [0] == "s" && levels [1] == "e");
+				return ret;
+			}
+			public void Captured(List<string> levels, byte[] bytes) {
+				var ls = string.Join(".", levels);
+				var unpacked = new MiniMessagePack.MiniMessagePacker ().Unpack (bytes);
+				if (ls == "r.a") {
+					Assert.AreEqual (1, unpacked);
+				} else if (ls == "r.c") {
+					Assert.AreEqual (1, (unpacked as Dictionary<string, object>).Count);
+					Assert.AreEqual (3, (unpacked as Dictionary<string, object>).Values.First());
+				} else if (ls == "r") {
+					Assert.AreEqual (3, (unpacked as Dictionary<string, object>).Count);
+				} else if (ls == "s.e") {
+					Assert.AreEqual ("s", unpacked);
+				} else {
+					Assert.Fail ();
+				}
+				CaptureCount++;
 			}
 		}
 	}
